@@ -1,0 +1,153 @@
+#+TITLE: Backtracking Probe Training Experiment Plan
+#+DATE: 2025-10-07
+
+* Overview
+Train linear probes on model activations to predict backtracking-labeled tokens at different temporal lags. This will help determine if the model represents upcoming backtracking events in advance.
+
+* Data Summary
+- Dataset: 1000 annotated reasoning chains from latent-backtracking repo
+- Location: /workspace/all_annotated_chains.json
+- Labels: backtracking, initializing, deduction, uncertainty-estimation, example-testing, adding-knowledge
+- Format: Each chain has problem, reasoning_chain (raw), and annotated_chain (with section labels)
+
+* Implementation Plan
+
+** 1. Environment Setup
+*** 1.1 Create project structure
+- probe_training/
+  - data/
+  - models/
+  - results/
+  - utils/
+
+*** 1.2 Dependencies
+- torch
+- transformers
+- nnsight (for activation extraction)
+- scikit-learn (for probe training)
+- numpy, pandas
+- tqdm
+- plotly (for visualization)
+
+** 2. Data Processing Pipeline
+*** 2.1 Parse annotated chains
+- Load all_annotated_chains.json
+- Extract annotations with categories and text segments
+- Map annotations to token positions (reuse code from base_steering_vectors.py)
+
+*** 2.2 Create binary labels for each category
+- Primary focus: "backtracking" label
+- Also support other categories for comparison
+- Format: token_idx -> {is_backtracking: 0/1, is_deduction: 0/1, ...}
+
+*** 2.3 Train/validation split
+- 80/20 split (800 train, 200 validation)
+- Stratified by presence of backtracking events
+
+** 3. Activation Extraction
+*** 3.1 Model selection
+- Base model: meta-llama/Llama-3.1-8B (4096 hidden dim)
+
+*** 3.2 Layer selection
+- Extract from multiple layers: [8, 10, 12, 14, 16]
+- Layer 10 is baseline (used in original code)
+
+*** 3.3 Forward pass implementation
+- Process each chain through model using nnsight
+- Save activations at selected layers
+- Format: {chain_id: {layer: [seq_len, hidden_dim]}}
+- Save to disk to avoid recomputation
+
+** 4. Probe Training
+*** 4.1 Probe architecture
+- Linear probe: single linear layer (4096 -> num_classes)
+- Binary classification for each label type
+- Regularization: L2 penalty (tune lambda)
+
+*** 4.2 Lag configurations
+- Lag 0: predict backtracking at current position
+- Lag -4: predict backtracking 4 tokens in the future
+- Lag -8: predict backtracking 8 tokens in the future
+- Lag -12: predict backtracking 12 tokens in the future
+- Lag -16: predict backtracking 16 tokens in the future
+- Also test positive lags (past context): +4, +8
+
+*** 4.3 Training procedure
+For each (layer, lag) combination:
+- Input: activations[t]
+- Target: label[t + lag]
+- Loss: Binary cross-entropy
+- Optimizer: Adam with learning rate tuning
+- Batch size: 64 (or memory-limited)
+- Epochs: 50 with early stopping
+- Metrics: Accuracy, F1, AUROC
+
+*** 4.4 Handle edge cases
+- Skip tokens where t + lag is out of bounds
+- Balance positive/negative examples (backtracking is likely rare)
+- Consider weighted sampling or class weights
+
+** 5. Evaluation & Analysis
+*** 5.1 Metrics per (layer, lag)
+- Validation accuracy
+- F1 score (important for imbalanced classes)
+- AUROC
+- Confusion matrix
+
+*** 5.2 Key questions to answer
+- Does accuracy degrade as lag increases?
+- Which layers best predict future backtracking?
+- How far in advance can we predict backtracking?
+
+*** 5.3 Visualization
+- Heatmap: layers (x) vs lags (y), color = F1 score
+- Line plots: lag vs accuracy for each layer
+- Feature importance analysis (top dimensions in probes)
+
+** 6. RunPod Deployment
+*** 6.1 Setup RunPod environment
+- GPU instance with >=24GB VRAM (for Llama-3.1-8B)
+- Template: PyTorch 2.0+ with CUDA 11.8+
+
+*** 6.2 Code organization
+- requirements.txt with all dependencies
+- Main scripts:
+  - extract_activations.py (can be run once, saves to disk)
+  - train_probes.py (trains all probe variants)
+  - evaluate_probes.py (generates results)
+  - visualize_results.py (creates plots)
+
+*** 6.3 Execution plan
+- Use runpod CLI or web interface
+- Upload code and data
+- Run activation extraction first (~1-2 hours)
+- Run probe training in parallel for different configs
+- Download results and visualizations
+
+*** 6.4 Resource estimation
+- Activation extraction: ~2-3 hours (1000 chains, multiple layers)
+- Probe training: ~30 min per (layer, lag) combo
+- Total configs: 5 layers × 7 lags = 35 probes
+- Estimated total time: 3-4 hours with parallelization
+
+** 7. Expected Outputs
+- Trained probes saved as .pt files
+- CSV with metrics for each configuration
+- Visualizations (heatmaps, line plots)
+- Summary report of findings
+
+* Implementation Priority
+1. Data processing and label extraction (CRITICAL)
+2. Activation extraction pipeline (CRITICAL)
+3. Basic probe training for lag=0 (VALIDATE APPROACH)
+4. Multi-lag training and evaluation (CORE EXPERIMENT)
+5. Visualization and analysis (RESULTS)
+6. RunPod deployment (EXECUTION)
+
+* Notes
+- The existing base_steering_vectors.py provides good reference for:
+  - Data parsing logic (extract_annotations, process_chain)
+  - Activation extraction using nnsight
+  - Token alignment with annotations
+- Key difference: we're training probes instead of computing difference-of-means
+- Probes allow us to test predictive relationships at different time lags
