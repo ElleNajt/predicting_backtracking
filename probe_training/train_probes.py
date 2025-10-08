@@ -53,7 +53,8 @@ def prepare_dataset_with_lag(activations_list, labels_list, layer, category, lag
         acts = activations[layer]  # [seq_len, hidden_dim]
         labs = labels[category]    # [seq_len]
 
-        seq_len = len(labs)
+        # Use minimum length to avoid index errors
+        seq_len = min(len(acts), len(labs))
 
         for t in range(seq_len):
             target_idx = t + lag
