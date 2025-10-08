@@ -6,7 +6,7 @@ echo "🔧 Setting up probe training environment on RunPod"
 
 # Install dependencies
 echo "📦 Installing dependencies..."
-pip install -q -r requirements.txt
+pip install --break-system-packages -q -r requirements.txt
 
 # Verify data file exists
 if [ ! -f "/workspace/all_annotated_chains.json" ]; then

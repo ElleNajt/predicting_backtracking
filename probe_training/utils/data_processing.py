@@ -70,13 +70,19 @@ def process_chain(tokenizer, chain: Dict[str, Any]) -> Tuple[torch.Tensor, Dict[
         tuple: (tokenized_full_text, annotation_indices)
             where annotation_indices maps categories to lists of (start, end) token pairs
     """
-    # Format problem with chat template
+    # Format problem - use simple format if no chat template available
     problem = chain["problem"]
-    formatted_problem = tokenizer.apply_chat_template(
-        [{"role": "user", "content": problem}],
-        tokenize=False,
-        add_generation_prompt=True,
-    )
+
+    try:
+        # Try to use chat template
+        formatted_problem = tokenizer.apply_chat_template(
+            [{"role": "user", "content": problem}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    except Exception:
+        # Fallback: simple format
+        formatted_problem = f"User: {problem}\n\nAssistant:"
 
     # Tokenize the formatted problem
     tokenized_problem = tokenizer.encode(formatted_problem, return_tensors="pt", add_special_tokens=False)[0]
