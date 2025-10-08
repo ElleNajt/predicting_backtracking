@@ -9,3 +9,12 @@ build
 htmlcov
 
 .env
+.runpod_config.json
+
+# Probe training artifacts
+*.csv
+*.pt
+*.pkl
+probe_training/data/
+probe_training/models/
+probe_training/results/

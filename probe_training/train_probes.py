@@ -26,17 +26,19 @@ class LinearProbe(nn.Module):
         return self.l2_penalty * torch.sum(self.linear.weight ** 2)
 
 
-def prepare_dataset_with_lag(activations_list, labels_list, layer, category, lag):
+def prepare_dataset_with_lag(activations_list, labels_list, layer, category, lag, single_layer=False):
     """
     Prepare dataset for training with specified lag.
 
     Args:
-        activations_list: List of dicts {layer: tensor of shape [seq_len, hidden_dim]}
+        activations_list: List of tensors [seq_len, hidden_dim] (if single_layer=True)
+                         OR List of dicts {layer: tensor [seq_len, hidden_dim]} (if single_layer=False)
         labels_list: List of dicts {category: array of shape [seq_len]}
-        layer: Which layer to use
+        layer: Which layer to use (ignored if single_layer=True)
         category: Which category to predict
         lag: Time lag (negative = predict future, positive = predict past)
             lag = -4 means: activation[t] predicts label[t-4]
+        single_layer: If True, activations_list contains tensors directly
 
     Returns:
         X (features), y (labels)
@@ -45,12 +47,17 @@ def prepare_dataset_with_lag(activations_list, labels_list, layer, category, lag
     y_list = []
 
     for activations, labels in zip(activations_list, labels_list):
-        if layer not in activations:
-            continue
         if category not in labels:
             continue
 
-        acts = activations[layer]  # [seq_len, hidden_dim]
+        # Get activations tensor
+        if single_layer:
+            acts = activations  # Already a tensor [seq_len, hidden_dim]
+        else:
+            if layer not in activations:
+                continue
+            acts = activations[layer]  # [seq_len, hidden_dim]
+
         labs = labels[category]    # [seq_len]
 
         # Use minimum length to avoid index errors
@@ -63,7 +70,8 @@ def prepare_dataset_with_lag(activations_list, labels_list, layer, category, lag
             if target_idx < 0 or target_idx >= seq_len:
                 continue
 
-            X_list.append(acts[t])
+            # Convert to float32 only when extracting
+            X_list.append(acts[t].float())
             y_list.append(labs[target_idx])
 
     if len(X_list) == 0:
@@ -198,48 +206,50 @@ def main():
     RESULTS_DIR = "/workspace/probe_training/results"
 
     LAYERS = [8, 10, 12, 14, 16]
-    LAGS = [-16, -12, -8, -4, 0, 4, 8]
+    LAGS = [0, 4, 8, 12, 16, 20, 24, 32, 40, 48]  # Extended future lags
     CATEGORY = "backtracking"  # Primary category of interest
     HIDDEN_DIM = 4096
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
 
-    # Load data
-    print("Loading activations and labels...")
-    with open(os.path.join(DATA_DIR, "train_activations.pkl"), 'rb') as f:
-        train_activations = pickle.load(f)
-
+    # Load labels once (shared across all layers)
+    print("Loading labels...")
     with open(os.path.join(DATA_DIR, "train_labels.pkl"), 'rb') as f:
         train_data = pickle.load(f)
         train_labels = train_data['labels']
-
-    with open(os.path.join(DATA_DIR, "val_activations.pkl"), 'rb') as f:
-        val_activations = pickle.load(f)
 
     with open(os.path.join(DATA_DIR, "val_labels.pkl"), 'rb') as f:
         val_data = pickle.load(f)
         val_labels = val_data['labels']
 
-    print(f"Train samples: {len(train_activations)}")
-    print(f"Val samples: {len(val_activations)}")
+    print(f"Train samples: {len(train_labels)}")
+    print(f"Val samples: {len(val_labels)}")
 
-    # Train probes for all combinations
+    # Train probes - load one layer at a time to save memory
     results = []
 
     total_configs = len(LAYERS) * len(LAGS)
     with tqdm(total=total_configs, desc="Training probes") as pbar:
         for layer in LAYERS:
+            # Load this layer's activations
+            print(f"\nLoading layer {layer} activations...")
+            with open(os.path.join(DATA_DIR, f"train_layer{layer}_activations.pkl"), 'rb') as f:
+                train_activations = pickle.load(f)
+
+            with open(os.path.join(DATA_DIR, f"val_layer{layer}_activations.pkl"), 'rb') as f:
+                val_activations = pickle.load(f)
+
             for lag in LAGS:
                 config_name = f"layer{layer}_lag{lag:+d}"
                 pbar.set_description(f"Training {config_name}")
 
-                # Prepare dataset
+                # Prepare dataset - simplified since we only have one layer
                 X_train, y_train = prepare_dataset_with_lag(
-                    train_activations, train_labels, layer, CATEGORY, lag
+                    train_activations, train_labels, layer, CATEGORY, lag, single_layer=True
                 )
                 X_val, y_val = prepare_dataset_with_lag(
-                    val_activations, val_labels, layer, CATEGORY, lag
+                    val_activations, val_labels, layer, CATEGORY, lag, single_layer=True
                 )
 
                 if X_train is None or X_val is None:
