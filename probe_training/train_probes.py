@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_precision_score
 import pandas as pd
 
 
@@ -191,9 +191,13 @@ def train_probe(
             val_auc = roc_auc_score(y_val.numpy(), val_probs)
         except:
             val_auc = 0.0
+        try:
+            val_pr_auc = average_precision_score(y_val.numpy(), val_probs)
+        except:
+            val_pr_auc = 0.0
 
     train_metrics = {'accuracy': train_acc, 'f1': train_f1}
-    val_metrics = {'accuracy': val_acc, 'f1': val_f1, 'auc': val_auc}
+    val_metrics = {'accuracy': val_acc, 'f1': val_f1, 'auc': val_auc, 'pr_auc': val_pr_auc}
 
     return probe, train_metrics, val_metrics
 
@@ -286,6 +290,7 @@ def main():
                     'val_acc': val_metrics['accuracy'],
                     'val_f1': val_metrics['f1'],
                     'val_auc': val_metrics['auc'],
+                    'val_pr_auc': val_metrics['pr_auc'],
                     'n_train': len(X_train),
                     'n_val': len(X_val),
                     'pos_ratio_train': pos_ratio_train,
@@ -302,7 +307,7 @@ def main():
 
     # Print summary
     print("\n=== Top 10 Probes by Validation F1 ===")
-    print(results_df.nlargest(10, 'val_f1')[['layer', 'lag', 'val_f1', 'val_acc', 'val_auc']])
+    print(results_df.nlargest(10, 'val_f1')[['layer', 'lag', 'val_f1', 'val_acc', 'val_auc', 'val_pr_auc']])
 
 
 if __name__ == "__main__":

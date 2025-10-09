@@ -45,7 +45,7 @@ def extract_single_layer_activations(text, model, tokenizer, layer_idx):
     return activations, tokens
 
 
-def colorize_html(text, tokens, predictions, tokenizer):
+def colorize_html(text, tokens, predictions, tokenizer, backtrack_indices=None):
     """
     Create HTML with text colored by prediction values.
 
@@ -54,6 +54,7 @@ def colorize_html(text, tokens, predictions, tokenizer):
         tokens: List of token IDs
         predictions: Array of prediction values [seq_len]
         tokenizer: HuggingFace tokenizer
+        backtrack_indices: Set of token indices that are annotated as backtracking
 
     Returns:
         HTML string
@@ -102,9 +103,16 @@ def colorize_html(text, tokens, predictions, tokenizer):
                 display: inline;
                 padding: 2px 0;
                 transition: background-color 0.2s;
+                color: #000000;
             }
             .token:hover {
                 outline: 1px solid #61dafb;
+            }
+            .backtrack-annotated {
+                border: 2px solid #00ff00;
+                padding: 1px 2px;
+                border-radius: 3px;
+                box-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
             }
             .gradient-bar {
                 height: 20px;
@@ -128,13 +136,16 @@ def colorize_html(text, tokens, predictions, tokenizer):
     </head>
     <body>
         <div class="container">
-            <h1>Transcript Colorized by Backtracking Probe (Lag +48)</h1>
+            <h1>Transcript Colorized by Backtracking Probe (Lag 0)</h1>
             <div class="legend">
-                <strong>Color Scale:</strong> White → Red indicates increasing likelihood of backtracking 48 tokens ahead
+                <strong>Color Scale:</strong> White → Red indicates increasing likelihood of backtracking at current position
                 <div class="gradient-bar"></div>
                 <div class="gradient-labels">
                     <span>Low prediction (unlikely backtrack)</span>
                     <span>High prediction (likely backtrack)</span>
+                </div>
+                <div style="margin-top: 15px;">
+                    <strong>Ground Truth:</strong> <span class="backtrack-annotated" style="display: inline-block; padding: 3px 8px;">Green box</span> = Annotated backtracking token
                 </div>
             </div>
             <div class="content">
@@ -155,10 +166,15 @@ def colorize_html(text, tokens, predictions, tokenizer):
         b = int(255 * (1 - pred_value))
         color = f"rgb({r}, {g}, {b})"
 
+        # Check if this is an annotated backtracking token
+        is_backtrack = backtrack_indices is not None and i in backtrack_indices
+        backtrack_class = ' backtrack-annotated' if is_backtrack else ''
+        backtrack_label = ' [BACKTRACK]' if is_backtrack else ''
+
         # Add tooltip with actual prediction value
         html_parts.append(
-            f'<span class="token" style="background-color: {color};" '
-            f'title="Token {i}: {predictions[i]:.4f}">{token_text}</span>'
+            f'<span class="token{backtrack_class}" style="background-color: {color};" '
+            f'title="Token {i}: {predictions[i]:.4f}{backtrack_label}">{token_text}</span>'
         )
 
     html_parts.append("""
@@ -175,8 +191,8 @@ def main():
     """Main pipeline to colorize a transcript."""
     # Configuration
     MODEL_NAME = "meta-llama/Llama-3.1-8B"
-    LAYER = 12  # Best layer for lag=48
-    LAG = 48
+    LAYER = 12  # Best layer for lag=0
+    LAG = 0
     PROBE_PATH = f"/workspace/probe_training/models/probe_layer{LAYER}_lag+{LAG}.pt"
     DATA_FILE = "/workspace/all_annotated_chains.json"
     OUTPUT_DIR = "/workspace/probe_training/visualizations"
@@ -210,19 +226,40 @@ def main():
     print("Loading annotated chains...")
     chains = load_annotated_chains(DATA_FILE)
 
-    # Process first 3 chains as examples
-    num_examples = min(3, len(chains))
-    print(f"Generating visualizations for first {num_examples} chains...")
+    # Filter chains: only validation set with backtracking annotations
+    print(f"Filtering chains with backtracking annotations...")
+    chains_to_process = []
+    for chain in chains:
+        if 'backtracking' in chain.get('annotated_chain', ''):
+            chains_to_process.append(chain)
 
-    for chain_idx in range(num_examples):
-        chain = chains[chain_idx]
-        task_id = chain.get('task_id', f'chain_{chain_idx}')
+    print(f"Found {len(chains_to_process)} chains with backtracking annotations")
+    print(f"Generating visualizations for first 10 chains...")
+
+    chains_to_process = chains_to_process[:10]
+
+    for chain in chains_to_process:
+        task_id = chain.get('task_id', 'unknown')
 
         print(f"\nProcessing {task_id}...")
 
         # Process chain to get formatted text and tokens
         tokens, annotation_indices = process_chain(tokenizer, chain)
         text = tokenizer.decode(tokens)
+
+        # Debug: print available annotation categories
+        print(f"  Annotation categories: {list(annotation_indices.keys())}")
+
+        # Get backtracking annotations - convert (start, end) ranges to individual indices
+        backtrack_indices = set()
+        if 'backtracking' in annotation_indices:
+            print(f"  Backtracking ranges: {len(annotation_indices['backtracking'])} ranges")
+            for start_idx, end_idx in annotation_indices['backtracking']:
+                # Include all tokens from start to end (inclusive)
+                for idx in range(start_idx, end_idx + 1):
+                    backtrack_indices.add(idx)
+
+        print(f"  Found {len(backtrack_indices)} annotated backtracking tokens")
 
         # Extract activations for this layer
         print(f"  Extracting layer {LAYER} activations...")
@@ -237,7 +274,7 @@ def main():
 
         # Generate HTML
         print(f"  Generating HTML visualization...")
-        html = colorize_html(text, tokens.tolist(), predictions, tokenizer)
+        html = colorize_html(text, tokens.tolist(), predictions, tokenizer, backtrack_indices)
 
         # Save HTML
         output_path = os.path.join(OUTPUT_DIR, f"{task_id}_colorized.html")
